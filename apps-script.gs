@@ -1,0 +1,78 @@
+/**
+ * EBD Animada 91 anos — recebe os resultados do quiz e grava na planilha.
+ * Cole este código em Extensões > Apps Script da planilha.
+ *
+ * Cada telefone ocupa UMA linha. Se a pessoa jogar de novo, os dados
+ * são atualizados e fica valendo a MAIOR pontuação.
+ */
+
+const SHEET_NAME = 'Participantes';
+const HEADERS = ['ID', 'Nome', 'Sobrenome', 'Telefone', 'Telefone (só números)', 'Perfil',
+                 'Pontos', 'Acertos', 'Data/Hora do quiz', 'Jogadas', 'Última atualização'];
+
+function doPost(e) {
+  const lock = LockService.getScriptLock();
+  try {
+    lock.waitLock(20000); // evita duas gravações ao mesmo tempo
+
+    const p = JSON.parse(e.postData.contents);
+    const digits = String(p.telefone || '').replace(/\D/g, '');
+    if (!p.nome || digits.length < 10) return json({ ok: false, erro: 'dados inválidos' });
+
+    const sheet = getSheet();
+    const pontos = Number(p.pontos) || 0;
+    const acertos = Number(p.acertos) || 0;
+    const quando = p.dataHora ? new Date(p.dataHora) : new Date();
+    const agora = new Date();
+
+    // procura o telefone na coluna E
+    const last = sheet.getLastRow();
+    let row = -1;
+    if (last > 1) {
+      const tels = sheet.getRange(2, 5, last - 1, 1).getValues();
+      const i = tels.findIndex(r => String(r[0]) === digits);
+      if (i >= 0) row = i + 2;
+    }
+
+    if (row === -1) {
+      sheet.appendRow([p.id || '', p.nome, p.sobrenome || '', p.telefone || '', digits,
+                       p.perfil || '', pontos, acertos, quando, 1, agora]);
+    } else {
+      const cur = sheet.getRange(row, 1, 1, HEADERS.length).getValues()[0];
+      const melhor = pontos > Number(cur[6]);
+      sheet.getRange(row, 1, 1, HEADERS.length).setValues([[
+        cur[0] || p.id || '', p.nome, p.sobrenome || '', p.telefone || '', digits, p.perfil || '',
+        melhor ? pontos : cur[6], melhor ? acertos : cur[7], melhor ? quando : cur[8],
+        (Number(cur[9]) || 1) + 1, agora
+      ]]);
+    }
+    return json({ ok: true });
+  } catch (err) {
+    return json({ ok: false, erro: String(err) });
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+// Abrir a URL do script no navegador mostra isto (serve para testar se está publicado).
+function doGet() {
+  return json({ ok: true, msg: 'Script da EBD funcionando' });
+}
+
+function getSheet() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sh = ss.getSheetByName(SHEET_NAME);
+  if (!sh) sh = ss.insertSheet(SHEET_NAME);
+  if (sh.getLastRow() === 0) {
+    sh.appendRow(HEADERS);
+    sh.getRange(1, 1, 1, HEADERS.length).setFontWeight('bold');
+    sh.setFrozenRows(1);
+    sh.getRange('E:E').setNumberFormat('@'); // telefone como texto
+  }
+  return sh;
+}
+
+function json(obj) {
+  return ContentService.createTextOutput(JSON.stringify(obj))
+    .setMimeType(ContentService.MimeType.JSON);
+}
