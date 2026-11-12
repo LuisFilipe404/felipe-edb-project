@@ -530,7 +530,7 @@ const CONFIG = {
   BASE_POINTS: 100,
   SPEED_BONUS_PER_SECOND: 5,
   STORAGE_KEY: 'ebd91_participantes_v1',
-  WEBHOOK_URL: 'https://script.google.com/macros/s/AKfycbzEjajJ1RZAEPM9f2GvwhlYtn8XJ8hEItiVFHIB_nIQZ4BVlnOcQsNLc3duTuJQcB_p/exec',
+  WEBHOOK_URL: 'https://script.google.com/macros/s/AKfycbyB4ebT7ys0E-g7EbtGHbd6Tt45ivM-VkWfUn5IMcn_x8EuqN9Nmr1Wvov3SHazXNF_/exec',
   VIDEO_URL: ''   // link do YouTube com o vídeo da lição (vazio = botão escondido)
 };
 
@@ -725,7 +725,7 @@ function sendWebhook(p, tentativa){
       headers:{'Content-Type':'text/plain;charset=utf-8'},
       body:JSON.stringify({ id:p.id, nome:p.nome, sobrenome:p.sobrenome, telefone:p.telefone,
         perfil:p.perfil, pontos:p.pontos, acertos:p.acertos, dataHora:p.dataHora })
-    }).then(r => r.json()).then(r => { if(!r || !r.ok) retry(); }).catch(retry);
+    }).then(r => r.json()).then(r => { if(!r || !r.ok) retry(); else fetchRanking(); }).catch(retry);
   }catch(e){ retry(); }
 }
 
@@ -742,7 +742,7 @@ function route(){
   $$('.nav a').forEach(a => {
     if(a.dataset.nav === v) a.setAttribute('aria-current','page'); else a.removeAttribute('aria-current');
   });
-  if(v === 'ranking') renderRanking();
+  if(v === 'ranking'){ renderRanking(); fetchRanking(); }
   Quiz.syncClock();
   window.scrollTo(0,0);
 }
@@ -922,17 +922,37 @@ const Quiz = {
 /* =====================================================================
    RANKING
    ===================================================================== */
+/* Ranking da planilha (todos os aparelhos). Enquanto não carrega, ou se falhar, usa o do aparelho. */
+const Remote = { list:null, loading:false };
+function fetchRanking(){
+  if(!CONFIG.WEBHOOK_URL || Remote.loading) return;
+  Remote.loading = true;
+  const me = LS.get('ebd91_me');
+  const url = CONFIG.WEBHOOK_URL + '?action=ranking' + (me && me.telefoneDigits ? '&me=' + encodeURIComponent(me.telefoneDigits) : '');
+  fetch(url).then(r => r.json()).then(r => {
+    if(r && r.ok && Array.isArray(r.ranking)){ Remote.list = r.ranking; if(currentView === 'ranking') renderRanking(); }
+  }).catch(() => {}).finally(() => { Remote.loading = false; });
+}
+function rankingRows(){
+  if(Remote.list) return Remote.list;
+  const me = LS.get('ebd91_me');
+  return Store.ranking().map(p => ({ nome:publicName(p), perfil:p.perfil, pontos:p.pontos,
+    me: !!me && p.telefoneDigits === me.telefoneDigits }));
+}
+
 function renderRanking(){
-  const me = LS.get('ebd91_me'), list = Store.ranking(), medals = ['🥇','🥈','🥉'];
+  const list = rankingRows(), medals = ['🥇','🥈','🥉'];
   const ol = $('#rank-list');
-  if(!list.length){
+  if(!list.length && CONFIG.WEBHOOK_URL && !Remote.list){
+    ol.innerHTML = '<li><div class="who"><b>Carregando ranking…</b></div></li>';
+  }else if(!list.length){
     ol.innerHTML = '<li><div class="who"><b>Ninguém jogou ainda</b><span>Faça o quiz e seja o primeiro do ranking.</span></div></li>';
   }else{
     ol.innerHTML = list.map((p, i) => {
-      const mine = me && !p.demo && p.telefoneDigits === me.telefoneDigits;
+      const mine = p.me;
       return '<li class="' + (mine ? 'me' : '') + '">' +
         '<span class="pos' + (i < 3 ? ' medal' : '') + '">' + (i < 3 ? '<span aria-hidden="true">' + medals[i] + '</span><span class="sr-only">' + (i+1) + 'º lugar</span>' : (i+1) + 'º') + '</span>' +
-        '<div class="who"><b>' + esc(publicName(p)) + (mine ? ' (você)' : '') + '</b><span>' + esc(p.perfil) + (p.demo ? ', exemplo' : '') + '</span></div>' +
+        '<div class="who"><b>' + esc(p.nome) + (mine ? ' (você)' : '') + '</b><span>' + esc(p.perfil) + '</span></div>' +
         '<span class="p">' + p.pontos + '</span></li>';
     }).join('');
   }
@@ -1136,6 +1156,7 @@ function init(){
     Store.data = { participantes:[], sorteados:[], ganhadorPublico:'' }; Store.persist(); renderAdmin(); renderRanking(); toast('Todas as inscrições deste aparelho foram apagadas.'); }));
 
   tickCountdown(); setInterval(tickCountdown, 1000);
+  setInterval(() => { if(currentView === 'ranking' && !document.hidden) fetchRanking(); }, 30000);
   route();
 }
 init();

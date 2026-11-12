@@ -46,6 +46,7 @@ function doPost(e) {
         (Number(cur[9]) || 1) + 1, agora
       ]]);
     }
+    CacheService.getScriptCache().remove('ranking'); // ranking reflete o novo resultado na hora
     return json({ ok: true });
   } catch (err) {
     return json({ ok: false, erro: String(err) });
@@ -54,9 +55,48 @@ function doPost(e) {
   }
 }
 
-// Abrir a URL do script no navegador mostra isto (serve para testar se está publicado).
-function doGet() {
-  return json({ ok: true, msg: 'Script da EBD funcionando' });
+/**
+ * GET ?action=ranking[&me=81987654321]
+ * Ranking público: só nome + inicial do sobrenome, perfil e pontos. NUNCA o telefone.
+ * "me" (opcional) marca a linha do próprio participante, sem revelar a de mais ninguém.
+ * Sem parâmetros: só confirma que o script está publicado.
+ */
+function doGet(e) {
+  const params = (e && e.parameter) || {};
+  if (params.action !== 'ranking') return json({ ok: true, msg: 'Script da EBD funcionando' });
+
+  const me = String(params.me || '').replace(/\D/g, '');
+  const rows = getRankingRows(); // [{nome, perfil, pontos, quando, tel}]
+  const lista = rows.map(r => ({ nome: r.nome, perfil: r.perfil, pontos: r.pontos, me: !!me && r.tel === me }));
+  return json({ ok: true, ranking: lista });
+}
+
+function getRankingRows() {
+  const cache = CacheService.getScriptCache();
+  const hit = cache.get('ranking');
+  if (hit) return JSON.parse(hit);
+
+  const sh = getSheet();
+  const last = sh.getLastRow();
+  if (last < 2) return [];
+  const rows = sh.getRange(2, 1, last - 1, HEADERS.length).getValues()
+    .filter(r => r[1] && r[4])
+    .map(r => ({
+      nome: publicName(r[1], r[2]),
+      perfil: String(r[5] || ''),
+      pontos: Number(r[6]) || 0,
+      quando: r[8] instanceof Date ? r[8].getTime() : Date.parse(r[8]) || 0,
+      tel: String(r[4])
+    }))
+    .sort((a, b) => b.pontos - a.pontos || a.quando - b.quando);
+
+  try { cache.put('ranking', JSON.stringify(rows), 15); } catch (err) {} // 15 s de cache
+  return rows;
+}
+
+function publicName(nome, sobrenome) {
+  const ini = String(sobrenome || '').trim().split(' ').pop().charAt(0).toLocaleUpperCase('pt-BR');
+  return String(nome).trim() + (ini ? ' ' + ini + '.' : '');
 }
 
 function getSheet() {
